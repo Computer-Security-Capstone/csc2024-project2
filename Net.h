@@ -2,11 +2,17 @@
 #define NET_H
 
 #include <iostream>
+#include <unistd.h>
+#include <string.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include <linux/if_packet.h>
 #include <net/ethernet.h>
+#include <netinet/tcp.h>
+#include <netinet/ip.h>
 #include <map>
+#include <net/if.h>
 #include <sys/time.h>
 using namespace std;
 
@@ -16,6 +22,7 @@ using namespace std;
 #define ETH_HDR_LEN 14
 #define IPV4_HDR_LEN 20
 #define ARP_HDR_LEN 28
+#define TCP_HDR_LEN 20
 
 struct Arp {
     ether_header eth_hdr;
@@ -31,6 +38,13 @@ struct Arp {
     uint8_t padding[18] = {0};
 } __attribute__((packed));
 
+struct tcp_packet {
+    ether_header eth_hdr;
+    iphdr ip_hdr;
+    tcphdr tcp_hdr;
+    char data[ETH_FRAME_LEN - ETH_HDR_LEN - IPV4_HDR_LEN - TCP_HDR_LEN];
+} __attribute__((packed));
+
 const uint8_t broadcast_mac[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 class Net {
@@ -39,19 +53,27 @@ class Net {
         Net(string if_name);
         void print_net_mac();
         void arp_spoofing();
-        void forward();
         void get_net_mac(); // Get all other devices' IP/MAC in the network
+        uint32_t get_gateway() { return gateway; } // Get the IP of default gateway
+        int get_recv_sock() { return recv_sock; }
+        int get_send_sock() { return send_sock; }
+        uint32_t get_ip() { return ip; }
+        map<uint32_t, uint8_t*> *get_arp_table() { return &arp_table; }
+        sockaddr_ll *get_arp_addr() { return &arp_addr; }
+        uint8_t *get_mac() { return mac; }
     private:
-        void get_netinfo(string if_name); // Get IP, netmask and all other devices' IP/MAC in the network
-        void set_arp_socket();
+        void get_net_info(string if_name); // Get IP, netmask and all other devices' IP/MAC in the network
+        void set_socket();
+        void get_gateway_ip();
         map<uint32_t, uint8_t*> arp_table;
         uint32_t ip;
+        uint32_t gateway;
         uint32_t mask;
         uint8_t mac[6];
         string if_name;
-        int sock, arp_sock;
+        int arp_sock, recv_sock, send_sock;
         sockaddr_ll arp_addr;
-        timeval recv_timeout{ .tv_sec = 0, .tv_usec = 3};
+        timeval arp_timeout{ .tv_sec = 0, .tv_usec = 3}, recv_timeout{ .tv_sec = 0, .tv_usec = 3};
 };
 
 #endif

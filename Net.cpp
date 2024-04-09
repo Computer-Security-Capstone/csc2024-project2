@@ -1,26 +1,22 @@
-#include <unistd.h>
-#include <arpa/inet.h>
 #include <sys/types.h>
 #include <ifaddrs.h>
-#include <string.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <linux/if_ether.h>
 #include <netinet/ip.h>
 #include <cstdint>
 #include <cstdlib>
-#include <net/if.h>
 #include "Net.h"
 
 using namespace std;
 
 #define SEND_PACKETS 2
-#define GRATUITOUS 10
+#define GRATUITOUS 3
 
-Net::Net(){ get_netinfo(""); }
-Net::Net(string if_name) { get_netinfo(if_name); };
+Net::Net(){ get_net_info(""); }
+Net::Net(string if_name) { get_net_info(if_name); };
 
-void Net::get_netinfo(string if_name) {
+void Net::get_net_info(string if_name) {
     ifaddrs *ifaddr;
     if (getifaddrs(&ifaddr)) {
         perror("getifaddrs() failed");
@@ -60,22 +56,22 @@ void Net::get_netinfo(string if_name) {
         if (if_name.length() == 0 && (ip & 0xff000000) != (127 << 24)) break; // If interface is not specified, choose the first interface whose IP doesn't belong to 127.0.0.0/8
     }
     freeifaddrs(ifaddr);
-    set_arp_socket();
+    set_socket();
 }
 
-void Net::set_arp_socket() {
+void Net::set_socket() {
+    // Set the socket for ARP
     memset(&arp_addr, 0, sizeof(arp_addr));
     arp_addr.sll_family = AF_PACKET;
     arp_addr.sll_ifindex = if_nametoindex(if_name.c_str());
     arp_addr.sll_halen = htons(6);
     memcpy(arp_addr.sll_addr, mac, sizeof(uint8_t) * 6);
     
-    arp_sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
-    if (arp_sock <= 0) {
+    if ((arp_sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP))) <= 0) {
         perror("Failed to create socket");
         exit(EXIT_FAILURE);
     }
-    if(setsockopt(arp_sock, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout, sizeof(recv_timeout)) < 0) {
+    if(setsockopt(arp_sock, SOL_SOCKET, SO_RCVTIMEO, &arp_timeout, sizeof(arp_timeout)) < 0) {
         perror("setsockopt() failed");
         exit(EXIT_FAILURE);
     }
@@ -83,6 +79,30 @@ void Net::set_arp_socket() {
         perror("bind() failed");
         exit(EXIT_FAILURE);
     }
+
+    // Set the socket for receiving packets
+    if ((recv_sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))) <= 0) {
+        perror("Failed to create socket");
+        exit(EXIT_FAILURE);
+    } 
+    if (bind(recv_sock, (sockaddr*)&arp_addr, sizeof(arp_addr)) < 0){
+        perror("bind() failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Set the socket for sending packets
+    if ((send_sock = socket(AF_PACKET, SOCK_RAW, htons(IPPROTO_RAW))) <= 0) {
+        perror("Failed to create socket");
+        exit(EXIT_FAILURE);
+    } 
+    if (bind(send_sock, (sockaddr*)&arp_addr, sizeof(arp_addr)) < 0){
+        perror("bind() failed");
+        exit(EXIT_FAILURE);
+    }
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strcpy(ifr.ifr_name, if_name.c_str());
+    setsockopt(send_sock, SOL_SOCKET, SO_BINDTODEVICE, (void*)&ifr, sizeof(ifr));
 }
 
 void Net::get_net_mac() {
@@ -108,7 +128,6 @@ void Net::get_net_mac() {
                 perror("sendto() failed");
                 exit(EXIT_FAILURE);
             }
-
             // Receive an ARP reply
             Arp reply;
             bool no_reply = false;
@@ -118,7 +137,7 @@ void Net::get_net_mac() {
                     no_reply = true;
                     break;
                 }
-            } while (ntohs(reply.eth_hdr.ether_type) != ETH_P_ARP || ntohs(reply.operation) != ARP_REPLY); // Chech whether it is an ARP reply
+            } while (ntohs(reply.eth_hdr.ether_type) != ETH_P_ARP || ntohs(reply.operation) != ARP_REPLY); // Check whether it is an ARP reply
             if (no_reply) continue;
             // Add record into ARP table
             uint32_t sender_ip = ntohl(reply.sender_protocol_addr);
@@ -130,6 +149,24 @@ void Net::get_net_mac() {
             memcpy(arp_table[sender_ip], reply.sender_hardware_addr, sizeof(uint8_t) * 6);
         }
     }
+    get_gateway_ip();
+}
+
+void Net::get_gateway_ip() {
+    char cmd[64], iface[32];
+    uint8_t ip_addr[4];
+    int tmp;
+    strcpy(cmd, "ip route");
+    FILE *fp;
+    if ((fp = popen(cmd, "r")) == NULL) {
+        perror("popen() failed");
+        exit(EXIT_FAILURE);
+    }
+    while (true) {
+        int ret = fscanf(fp, "default via %hhu.%hhu.%hhu.%hhu dev %s proto dhcp metric %d", &ip_addr[0],&ip_addr[1], &ip_addr[2], &ip_addr[3], iface, &tmp);
+        if (ret != EOF && !strcmp(iface, if_name.c_str())) break;
+    }
+    gateway = (ip_addr[0] << 24) + (ip_addr[1] << 16) + (ip_addr[2] << 8) + ip_addr[3];
 }
 
 void Net::print_net_mac() {
@@ -170,8 +207,4 @@ void Net::arp_spoofing() {
             }
         }
     }
-}
-
-void Net::forward() {
-
 }
