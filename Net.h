@@ -24,6 +24,9 @@ using namespace std;
 #define ARP_HDR_LEN 28
 #define TCP_HDR_LEN 20
 
+#define BUF_SIZE 256
+#define ARP_SPOOFING_PERIOD 1000
+
 struct Arp {
     ether_header eth_hdr;
     uint16_t hardware_type;
@@ -31,11 +34,11 @@ struct Arp {
     uint8_t hardware_length;
     uint8_t protocol_length;
     uint16_t operation;
-    uint8_t sender_hardware_addr[6];
+    uint8_t sender_hardware_addr[ETHER_ADDR_LEN];
     uint32_t sender_protocol_addr;
-    uint8_t target_hardware_addr[6];
+    uint8_t target_hardware_addr[ETHER_ADDR_LEN];
     uint32_t target_protocol_addr;
-    uint8_t padding[18] = {0};
+    uint8_t padding[18] = {0}; // Padding to 64 byte
 } __attribute__((packed));
 
 struct tcp_packet {
@@ -45,22 +48,19 @@ struct tcp_packet {
     char data[ETH_FRAME_LEN - ETH_HDR_LEN - IPV4_HDR_LEN - TCP_HDR_LEN];
 } __attribute__((packed));
 
-const uint8_t broadcast_mac[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+const uint8_t broadcast_mac[ETHER_ADDR_LEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 class Net {
     public:
         Net();
         Net(string if_name);
+        ~Net();
         void print_net_mac();
         void arp_spoofing();
+        void forward_ipv4(tcp_packet* buf, int len);
         void get_net_mac(); // Get all other devices' IP/MAC in the network
         uint32_t get_gateway() { return gateway; } // Get the IP of default gateway
-        int get_recv_sock() { return recv_sock; }
-        int get_send_sock() { return send_sock; }
-        uint32_t get_ip() { return ip; }
-        map<uint32_t, uint8_t*> *get_arp_table() { return &arp_table; }
-        sockaddr_ll *get_arp_addr() { return &arp_addr; }
-        uint8_t *get_mac() { return mac; }
+        int get_forward_sock() { return forward_sock; }
     private:
         void get_net_info(string if_name); // Get IP, netmask and all other devices' IP/MAC in the network
         void set_socket();
@@ -69,9 +69,9 @@ class Net {
         uint32_t ip;
         uint32_t gateway;
         uint32_t mask;
-        uint8_t mac[6];
+        uint8_t mac[ETHER_ADDR_LEN];
         string if_name;
-        int arp_sock, recv_sock, send_sock;
+        int arp_sock, forward_sock;
         sockaddr_ll arp_addr;
         timeval arp_timeout{ .tv_sec = 0, .tv_usec = 3}, recv_timeout{ .tv_sec = 0, .tv_usec = 3};
 };

