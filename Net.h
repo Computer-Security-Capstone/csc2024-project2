@@ -66,14 +66,12 @@ class Net {
         void set_socket();
         void get_gateway_ip();
         map<uint32_t, uint8_t*> arp_table;
-        uint32_t ip;
-        uint32_t gateway;
-        uint32_t mask;
+        uint32_t ip, gateway, mask;
         uint8_t mac[ETHER_ADDR_LEN];
         string if_name;
         int arp_sock, forward_sock;
         sockaddr_ll arp_addr;
-        timeval arp_timeout{ .tv_sec = 0, .tv_usec = 3}, recv_timeout{ .tv_sec = 0, .tv_usec = 3};
+        timeval arp_timeout{ .tv_sec = 0, .tv_usec = 3};
 };
 
 #endif
