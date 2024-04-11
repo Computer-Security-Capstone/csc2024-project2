@@ -5,6 +5,6 @@
 - Execute (using Test Scenario II):
     ```
     make
-    ./mitm_attack
-    ./pharm_attack
+    ./mitm_attack [interface]
+    ./pharm_attack [interface]
     ```
