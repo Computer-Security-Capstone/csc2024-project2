@@ -26,6 +26,27 @@ using namespace std;
 
 #define BUF_SIZE 256
 #define ARP_SPOOFING_PERIOD 1000
+#define ANSWER_SIZE 4096
+#define UDP_HDR_LEN 8
+
+typedef struct udphdr {
+    uint16_t source;
+    uint16_t dest;
+    uint16_t len;
+    uint16_t check;
+} __attribute__((packed)) udphdr;
+
+typedef struct dns_hdr{
+    ether_header eth_hdr;
+    iphdr ip_hdr;
+    udphdr udp_hdr;
+    uint16_t id;
+    uint16_t flags;
+    uint16_t qdcount;
+    uint16_t ancount;
+    uint16_t nscount;
+    uint16_t arcount;
+} __attribute__((packed)) dns_hdr_t;
 
 struct Arp {
     ether_header eth_hdr;
